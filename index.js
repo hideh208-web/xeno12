@@ -1465,4 +1465,17 @@ client.on('messageDeleteBulk', async (messages) => {
 
 process.on('unhandledRejection', (r) => log('UnhandledRejection', r));
 
+// keep hosters happy: create a tiny HTTP server so platforms that port-scan
+// (Render, Railway, etc.) see an open port and don't shut the process down.
+try {
+    const http = require('http');
+    const PORT = process.env.PORT || 3000;
+    http.createServer((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('OK');
+    }).listen(PORT).on('listening', () => log(`HTTP server listening on port ${PORT}`)).on('error', (err) => log('HTTP server error', err));
+} catch (e) { log('failed to start http server', e); }
+
+process.on('uncaughtException', (err) => { log('UncaughtException', err); });
+
 client.login(TOKEN).catch(e => { log('Login failed', e); process.exit(1); });
