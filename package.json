@@ -1,0 +1,17 @@
+{
+  "name": "xeno",
+  "version": "1.0.0",
+  "description": "Important: You pasted a bot token publicly. Immediately revoke that token in the Discord Developer Portal and create a new token. Do NOT commit your token to source control or paste it in public chats.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.2.3"
+  }
+}
