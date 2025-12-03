@@ -20,6 +20,17 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 function readJson(p, def = {}) { try { if (!fs.existsSync(p)) return def; const raw = fs.readFileSync(p, 'utf8'); return raw ? JSON.parse(raw) : def; } catch (e) { log('readJson error', e); return def; } }
 function writeJson(p, v) { try { fs.writeFileSync(p, JSON.stringify(v, null, 2)); } catch (e) { log('writeJson error', e); } }
 
+// Logging helper: sanitize and shorten long messages for terminal
+function shortText(s, max = 200) {
+    try {
+        if (!s) return '';
+        // collapse whitespace and strip newlines
+        let t = String(s).replace(/\s+/g, ' ').trim();
+        if (t.length > max) return t.slice(0, max - 3) + '...';
+        return t;
+    } catch (e) { return ''; }
+}
+
 // Create a lightweight snapshot of a guild's roles and channels for quick restoration
 function createGuildSnapshot(guild) {
     try {
@@ -716,6 +727,13 @@ client.on('messageCreate', async (message) => {
         // Do not trigger autoresponders for reply messages (drag-to-reply)
         if (message.reference) return;
         const raw = message.content.trim();
+
+        // Terminal-friendly message logging
+        try {
+            const loc = message.guild ? `${message.guild.name}(${message.guild.id})` : 'DM';
+            const ch = message.channel ? (message.channel.name ? `#${message.channel.name}` : `chan:${message.channel.id}`) : 'unknown';
+            log('Message →', loc, ch, `${message.author.tag}(${message.author.id}):`, shortText(raw, 300));
+        } catch (e) { /* ignore logging errors */ }
 
         // If someone mentions the bot directly with @, respond with the friendly identity message
         try {
@@ -1602,6 +1620,21 @@ client.on('messageDeleteBulk', async (messages) => {
         }
     } catch (e) { log('messageDeleteBulk handler error', e); }
 });
+
+// General guild and member event logging to terminal
+client.on('guildCreate', (g) => { try { log('Guild Join', `${g.name}(${g.id})`, `Members:${g.memberCount}`); } catch (e) { } });
+client.on('guildDelete', (g) => { try { log('Guild Leave', `${g.name}(${g.id})`); } catch (e) { } });
+client.on('guildMemberAdd', (m) => { try { log('Member Join', `${m.user.tag}(${m.user.id})`, '->', `${m.guild.name}(${m.guild.id})`); } catch (e) { } });
+client.on('guildMemberRemove', (m) => { try { log('Member Leave', `${m.user.tag}(${m.user.id})`, 'from', `${m.guild.name}(${m.guild.id})`); } catch (e) { } });
+
+client.on('channelCreate', (c) => { try { log('Channel Create', `${c.guild?.name || 'DM'}(${c.guild?.id || 'NA'})`, `${c.name}(${c.id})`, `type:${c.type}`); } catch (e) { } });
+client.on('channelDelete', (c) => { try { log('Channel Delete', `${c.guild?.name || 'DM'}(${c.guild?.id || 'NA'})`, `${c.name}(${c.id})`); } catch (e) { } });
+
+client.on('roleCreate', (r) => { try { log('Role Create', `${r.guild.name}(${r.guild.id})`, `${r.name}(${r.id})`); } catch (e) { } });
+client.on('roleDelete', (r) => { try { log('Role Delete', `${r.guild.name}(${r.guild.id})`, `${r.name}(${r.id})`); } catch (e) { } });
+
+client.on('emojiCreate', (e) => { try { log('Emoji Create', `${e.name}(${e.id})`, 'animated:', e.animated, 'in', `${e.guild?.name || 'NA'}(${e.guild?.id || 'NA'})`); } catch (err) { } });
+client.on('emojiDelete', (e) => { try { log('Emoji Delete', `${e.name}(${e.id})`, 'from', `${e.guild?.name || 'NA'}(${e.guild?.id || 'NA'})`); } catch (err) { } });
 
 process.on('unhandledRejection', (r) => log('UnhandledRejection', r));
 
