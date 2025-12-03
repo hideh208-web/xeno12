@@ -48,6 +48,8 @@ const SLASH_COMMANDS = [
     { name: 'userinfo', description: 'Show information about a user', options: [{ name: 'user', description: 'User to lookup', type: 6, required: false }] },
     { name: 'roles', description: 'List all server roles' },
     { name: 'avatar', description: 'Show a user avatar', options: [{ name: 'user', description: 'User to show (optional)', type: 6, required: false }] },
+    { name: 'emojify', description: 'Convert text into emoji-style letters', options: [{ name: 'text', description: 'Text to emojify', type: 3, required: true }] },
+    { name: 'emojisteal', description: 'Steal a custom emoji into this server (admin)', options: [{ name: 'emoji', description: 'Emoji to steal (custom emoji or image URL)', type: 3, required: true }, { name: 'name', description: 'Name for the new emoji (optional)', type: 3, required: false }] },
     { name: 'purge', description: 'Bulk delete messages (requires Manage Messages)', options: [{ name: 'amount', description: 'Number of messages to delete (1-100)', type: 4, required: true }] }
     , { name: 'autorespond', description: 'Add or remove autoresponder', options: [{ name: 'action', description: 'add|remove', type: 3, required: true, choices: [{ name: 'add', value: 'add' }, { name: 'remove', value: 'remove' }] }, { name: 'trigger', description: 'Trigger text or mention like <@id>', type: 3, required: true }, { name: 'response', description: 'Response text (when adding)', type: 3, required: false }] }
     , { name: 'kick', description: 'Kick a member', options: [{ name: 'member', description: 'Member to kick', type: 6, required: true }, { name: 'reason', description: 'Reason', type: 3, required: false }] }
@@ -105,6 +107,29 @@ const COMPLIMENTS = [
     'You make a difference.',
     'You bring out the best in other people.'
 ];
+
+// Helper: emojify text (letters -> regional indicator symbols, digits -> keycap)
+function emojifyText(text) {
+    if (!text) return '';
+    const mapDigits = { '0': '0️⃣', '1': '1️⃣', '2': '2️⃣', '3': '3️⃣', '4': '4️⃣', '5': '5️⃣', '6': '6️⃣', '7': '7️⃣', '8': '8️⃣', '9': '9️⃣' };
+    let out = '';
+    for (const ch of text) {
+        const lower = ch.toLowerCase();
+        if (/[a-z]/.test(lower)) {
+            // unicode regional indicator (A = 0x1F1E6)
+            const code = 0x1F1E6 + (lower.charCodeAt(0) - 97);
+            out += String.fromCodePoint(code) + ' ';
+        } else if (/[0-9]/.test(ch)) {
+            out += mapDigits[ch] + ' ';
+        } else if (ch === ' ') {
+            out += '\u2003'; // em space for spacing
+        } else {
+            out += ch;
+        }
+    }
+    // Trim and limit length to avoid huge messages
+    return out.trim().slice(0, 1900);
+}
 
 client.once('ready', async () => {
     log('Ready as', client.user.tag);
@@ -519,13 +544,63 @@ client.on('interactionCreate', async (interaction) => {
 
         if (cmd === 'avatar') {
             const userOpt = interaction.options.getUser('user') || interaction.user;
+            const png = userOpt.displayAvatarURL({ dynamic: true, size: 1024, format: 'png' });
+            const webp = userOpt.displayAvatarURL({ dynamic: true, size: 1024, format: 'webp' });
+            const gif = userOpt.displayAvatarURL({ dynamic: true, size: 1024, format: 'gif' });
             const embed = new EmbedBuilder()
                 .setTitle(`${userOpt.tag} — Avatar`)
+                .setDescription('High-quality avatar preview with direct download links.')
                 .setImage(userOpt.displayAvatarURL({ dynamic: true, size: 1024 }))
-                .setColor(0x7289DA)
+                .setColor(userOpt.accentColor ? Number(userOpt.accentColor) : 0x7289DA)
+                .addFields(
+                    { name: 'ID', value: `${userOpt.id}`, inline: true },
+                    { name: 'Animated', value: `${userOpt.avatar && userOpt.avatar.startsWith('a_') ? 'Yes' : 'No'}`, inline: true },
+                    { name: 'Formats', value: `[PNG](${png}) • [WEBP](${webp}) • [GIF](${gif})`, inline: false }
+                )
                 .setFooter({ text: `Requested by ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) })
                 .setTimestamp();
             return interaction.reply({ embeds: [embed] });
+        }
+
+        if (cmd === 'emojify') {
+            const text = interaction.options.getString('text', true) || '';
+            const out = emojifyText(text);
+            const embed = new EmbedBuilder()
+                .setTitle('🔠 Emojified Text')
+                .setDescription(out || 'Unable to emojify the provided text.')
+                .setColor(0xFFD166)
+                .setFooter({ text: `Requested by ${interaction.user.tag}` })
+                .setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
+
+        if (cmd === 'emojisteal') {
+            const raw = interaction.options.getString('emoji', true);
+            const nameOpt = interaction.options.getString('name');
+            const gid = interaction.guildId;
+            if (!gid || !interaction.guild) return interaction.reply({ content: 'This command must be used in a server.', ephemeral: true });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers) && interaction.user.id !== OWNER) return interaction.reply({ content: 'Manage Emojis & Stickers permission required to add emojis.', ephemeral: true });
+            // parse custom emoji <a:name:id> or URL
+            const m = raw.match(/<a?:([^:]+):(\d+)>/);
+            let url = raw;
+            let name = nameOpt || (m ? m[1] : `emoji_${crypto.randomInt(1000, 9999)}`);
+            if (m) {
+                const id = m[2];
+                const ext = raw.startsWith('<a:') ? 'gif' : 'png';
+                url = `https://cdn.discordapp.com/emojis/${id}.${ext}`;
+            }
+            try {
+                const created = await interaction.guild.emojis.create({ attachment: url, name });
+                const embed = new EmbedBuilder()
+                    .setTitle('✅ Emoji Added')
+                    .setDescription(`Successfully added emoji ${created.toString()} to this server.`)
+                    .setColor(0x2ECC71)
+                    .addFields({ name: 'Name', value: `${created.name}`, inline: true }, { name: 'ID', value: `${created.id}`, inline: true }, { name: 'URL', value: `${created.url}`, inline: false })
+                    .setTimestamp();
+                return interaction.reply({ embeds: [embed] });
+            } catch (e) {
+                return interaction.reply({ content: `Failed to add emoji: ${e.message}`, ephemeral: true });
+            }
         }
 
         if (cmd === 'autorespond') {
@@ -647,7 +722,22 @@ client.on('messageCreate', async (message) => {
             if (message.mentions && message.mentions.users && message.mentions.users.has(client.user.id)) {
                 // Avoid responding to other bots or to ourselves
                 if (!message.author.bot) {
-                    await message.channel.send('I AM XENO, A FRIENDLY BOT WITH BEAUTIFUL AND GOOD RESPONSE').catch(() => { });
+                    const embed = new EmbedBuilder()
+                        .setTitle('Hello — I am Xeno 🤖')
+                        .setDescription('Thanks for the mention! I am Xeno, your friendly server assistant. I help with moderation, utilities, and a few fun commands to make server life easier.')
+                        .setColor(0x7B61FF)
+                        .setThumbnail(client.user.displayAvatarURL({ dynamic: true }))
+                        .addFields(
+                            { name: 'Quick Help', value: 'Try `/help` for a full command list (ephemeral), or use the prefix commands like `$help`.', inline: false },
+                            { name: 'Moderation', value: '`/kick` • `/ban` • `/timeout` • `/purge`', inline: true },
+                            { name: 'Utilities', value: '`/serverinfo` • `/userinfo` • `/roles` • `/autorespond`', inline: true },
+                            { name: 'Fun', value: '`/joke` • `/coinflip` • `/8ball` • `/rps`', inline: false }
+                        )
+                        .setFooter({ text: `Mentioned by ${message.author.tag}` })
+                        .setTimestamp();
+
+                    // Send as a friendly reply to the mention
+                    await message.channel.send({ embeds: [embed] }).catch(() => { });
                 }
                 // continue processing other handlers
             }
@@ -1039,6 +1129,47 @@ client.on('messageCreate', async (message) => {
                 return message.reply({ embeds: [embed] });
             }
 
+            if (cmd === 'emojify') {
+                const text = args.join(' ').trim();
+                if (!text) return message.reply('Usage: $emojify <text>');
+                const out = emojifyText(text);
+                const embed = new EmbedBuilder()
+                    .setTitle('🔠 Emojified Text')
+                    .setDescription(out || 'Unable to emojify the provided text.')
+                    .setColor(0xFFD166)
+                    .setTimestamp();
+                return message.reply({ embeds: [embed] });
+            }
+
+            if (cmd === 'emojisteal') {
+                const raw = args[0];
+                const nameArg = args[1];
+                const gid = message.guildId;
+                if (!gid) return message.reply('This command must be used in a server.');
+                if (!message.member.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers) && message.author.id !== OWNER) return message.reply('Manage Emojis & Stickers permission required to add emojis.');
+                if (!raw) return message.reply('Usage: $emojisteal <emoji|url> [name]');
+                const m = raw.match(/<a?:([^:]+):(\d+)>/);
+                let url = raw;
+                let name = nameArg || (m ? m[1] : `emoji_${crypto.randomInt(1000, 9999)}`);
+                if (m) {
+                    const id = m[2];
+                    const ext = raw.startsWith('<a:') ? 'gif' : 'png';
+                    url = `https://cdn.discordapp.com/emojis/${id}.${ext}`;
+                }
+                try {
+                    const created = await message.guild.emojis.create({ attachment: url, name });
+                    const embed = new EmbedBuilder()
+                        .setTitle('✅ Emoji Added')
+                        .setDescription(`Successfully added emoji ${created.toString()} to this server.`)
+                        .setColor(0x2ECC71)
+                        .addFields({ name: 'Name', value: `${created.name}`, inline: true }, { name: 'ID', value: `${created.id}`, inline: true }, { name: 'URL', value: `${created.url}`, inline: false })
+                        .setTimestamp();
+                    return message.reply({ embeds: [embed] });
+                } catch (e) {
+                    return message.reply(`Failed to add emoji: ${e.message}`);
+                }
+            }
+
             if (cmd === 'compliment') {
                 const comp = COMPLIMENTS[Math.floor(Math.random() * COMPLIMENTS.length)];
                 const embed = new EmbedBuilder()
@@ -1052,10 +1183,19 @@ client.on('messageCreate', async (message) => {
 
             if (cmd === 'avatar') {
                 let target = message.mentions.users.first() || (args[0] ? await message.guild.members.fetch(args[0]).then(m => m.user).catch(() => null) : null) || message.author;
+                const png = target.displayAvatarURL({ dynamic: true, size: 1024, format: 'png' });
+                const webp = target.displayAvatarURL({ dynamic: true, size: 1024, format: 'webp' });
+                const gif = target.displayAvatarURL({ dynamic: true, size: 1024, format: 'gif' });
                 const embed = new EmbedBuilder()
                     .setTitle(`${target.tag} — Avatar`)
+                    .setDescription('High-quality avatar preview with direct download links.')
                     .setImage(target.displayAvatarURL({ dynamic: true, size: 1024 }))
-                    .setColor(0x7289DA)
+                    .setColor(target.accentColor ? Number(target.accentColor) : 0x7289DA)
+                    .addFields(
+                        { name: 'ID', value: `${target.id}`, inline: true },
+                        { name: 'Animated', value: `${target.avatar && target.avatar.startsWith('a_') ? 'Yes' : 'No'}`, inline: true },
+                        { name: 'Formats', value: `[PNG](${png}) • [WEBP](${webp}) • [GIF](${gif})`, inline: false }
+                    )
                     .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
                     .setTimestamp();
                 return message.reply({ embeds: [embed] });
